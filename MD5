@@ -1,0 +1,11 @@
+bd4433a48bdd5709921d6f1c2be91df8 *DESCRIPTION
+539a6866606ae58d7c93592c213b2325 *NAMESPACE
+a46ecb783022320ac3bab009f6c2e4a6 *R/sas7bdat.R
+69115616a588a715dbb818e6e6626687 *README
+90e96e913b452535e5434c3cad67d0ed *data/sas7bdat.sources.RData
+354a69c5ce2b9146b5dce897affe5759 *inst/doc/rst2Rnw.sh
+3b1d6ddd1af3b0a2971c961b698990c0 *inst/doc/sas7bdat.Rnw
+7436f3eb52a923524243b733553bd015 *inst/doc/sas7bdat.pdf
+79ae5fe6b941c6ff1fd04fd777ca8405 *inst/doc/sas7bdat.rst
+7ea4d18c8bc8e7b43362b878f1c59464 *man/read.sas7bdat.Rd
+85dab46e6b2a627e716bde6923a304a0 *man/sas7bdat.sources.Rd
