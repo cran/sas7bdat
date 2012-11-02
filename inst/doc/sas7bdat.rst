@@ -4,11 +4,14 @@ SAS7BDAT Database Binary Format
 
 by:
 
-| Matthew S. Shotwell, PhD
-| Assistant Professor
-| Department of Biostatistics
-| Vanderbilt University
-| matt.shotwell@vanderbilt.edu
+    | Matthew S. Shotwell, PhD
+    | Assistant Professor
+    | Department of Biostatistics
+    | Vanderbilt University
+    | matt.shotwell@vanderbilt.edu
+
+
+This work is licensed under the Creative Commons Attribution-ShareAlike 3.0 Unported License. To view a copy of this license, visit http://creativecommons.org/licenses/by-sa/3.0/.
 
 Contents
 ========
@@ -34,10 +37,10 @@ SAS7BDAT files consist of binary encoded data. Data files encoded in this format
 
 There appear to be significant differences in the SAS7BDAT format across operating systems and computer hardware platforms (32bit vs. 64bit). See the section on `platform differences`_ for more details. The format described below applies to the majority of the collection of test files referenced in ``data/sas7bdat.sources.RData`` directory (i.e. files associated with 32bit and some 64bit builds of SAS for Microsoft Windows).
 
-The figure below illustrates the overall structure of the SAS7BDAT database. Each file consists of a 1024 byte header, followed by PC pages, each of length PS bytes (PC and PS are shorthand for 'page count' and 'page size' respectively, and are used to denote these quantities throughout this document).::
+The figure below illustrates the overall structure of the SAS7BDAT database. Each file consists of a header (length := LH), followed by PC pages, each of length PS bytes (PC and PS are shorthand for 'page count' and 'page size' respectively, and are used to denote these quantities throughout this document).::
 
   ----------
-  |  1024  |  header 
+  |   LH   |  header 
   ----------
   |   PS   |  page 1
   ----------
@@ -51,7 +54,7 @@ The figure below illustrates the overall structure of the SAS7BDAT database. Eac
 SAS7BDAT Header
 ===============
 
-The SAS7BDAT file header contains a binary file identifier (*i.e.*, a magic number), the dataset name, timestamp, the number pages (PC), their size (PS) and a variety of other values that pertain to the database as a whole. The purpose of many header fields remain unknown, but are likely to include specifications for data compression and encryption, password protection, and dates/times of creation and/or modification. Most files encountered encode multi-byte values little-endian (least significant byte first). However, at least one file (written 3/12/1986) uses big-endian. Hence, it appears that multi-byte values are encoded using endianness of the platform where the file was written. It's not certain how the endianness is specified in the file header.
+The SAS7BDAT file header contains a binary file identifier (*i.e.*, a magic number), the dataset name, timestamp, the number pages (PC), their size (PS) and a variety of other values that pertain to the database as a whole. The purpose of many header fields remain unknown, but are likely to include specifications for data compression and encryption, password protection, and dates/times of creation and/or modification. Most files encountered encode multi-byte values little-endian (least significant byte first). However, at least one file has big-endian values. Hence, it appears that multi-byte values are encoded using endianness of the platform where the file was written. 
 
 The *offset table* below describes the SAS7BDAT file header as a sequence of bytes. Information stored in the table is indexed by its byte offset (first column) in the header and its length (second column) in bytes. Byte lengths having the form '%n' should read: 'the number of bytes remaining up to, but not including byte n'. The fourth column gives a shorthand description of the data contained at the corresponding offset. For example, 'uint, page size := PS' indicates that the data stored at the corresponding location is a little-endian unsigned integer representing the page size, which we denote PS. The description *????????????* indicates that the meaning of data stored at the corresponding offset is unknown. The third column represents the author's confidence (low, medium, high) in the corresponding offset, length, and description. Each offset table in this document is formatted in a similar fashion. Variables defined in an offset table are sometimes used in subsequent tables.
 
@@ -62,9 +65,12 @@ Header Offset Table
 offset		length	conf.	description
 ==============  ======  ======  ===============================================
 0		32	high	binary, `magic number`_ 
+32		1	medium	binary, Alignment_ := a1 (x33-4 else-0)
 32		3	low	*????????????*
-35		2	low	bitmasks? Alignment_ := a (x3222-4 x3333-8)
-37		2	low	*????????????*
+35		1	medium	binary, Alignment_ := a2 (x33-4 else-0)
+36		1	low	*????????????*
+37		1	low	int, endianness (x01-little x00-big)
+38		1	low	*????????????*
 39		1	low	ascii, file format version (1-UNIX or 2-WIN)
 40		8	low	*????????????*
 48		8	low	*????????????*
@@ -72,18 +78,20 @@ offset		length	conf.	description
 64		20	low	*????????????*
 84		8	high	ascii 'SAS FILE'
 92		64	high	ascii, dataset name
-156		8	medium	ascii, file type
-164+164%a	16	high	2x double, timestamp, secs since 1/1/60
-180+164%a	16	low	*????????????*
-196+164%a	20	low	*????????????*
-200+164%a	4	high	int, page size := PS
-204+164%a	4	high	int, page count := PC
-208+164%a	8	low	*????????????*
-216+164%a	8	high	ascii, release 
-224+164%a	8	medium	ascii, host (may be larger than 8 bytes)
-232+164%a	56	low	*????????????*
-288+164%a	48	low	string with timestamps, license?
-336		%1024	medium	filler/zeros
+156		8+a1	medium	ascii, file type
+164+a1		16	high	2x double, timestamp, secs since 1/1/60
+180+a1		16	low	*????????????*
+196+a2		4	high	int, length of SAS7BDAT header := LH
+200+a2		4	high	int, page size := PS
+204+a2		4	high	int, page count := PC
+208+a1+a2	8	low	*????????????*
+216+a1+a2	8	high	ascii, release 
+224+a1+a2	16	high	ascii, host
+240+a1+a2	16	high	ascii, version
+256+a1+a2	16	high	ascii, OS maker
+272+a1+a2	16	high	ascii, OS name
+288+a1+a2	48	low	string with timestamps, license?
+336+a1+a2	%LH	medium	filler/zeros
 ==============  ======  ======  ===============================================
 
 The 8 bytes beginning at offset 32 appear to hold information regarding the offset of the 'release' and 'host' information. The following table describes some of the possible polymorphisms, where the first column contains the hex values for bytes 32-39, the second column shows bytes 216-239 ('.' represents a non-ASCII character or '\0'). The byte at offset 39 appears to distinguish the file format type, where '1' indicates that the file was generated on a UNIX-like system, such as Linux or SunOS, and '2' indicates the file was generated on a Microsoft Windows platform. Additional data files are needed to investigate these aspects further.
@@ -120,7 +128,7 @@ hexadecimal  decimal  binary
 Alignment
 ---------
 
-In files generated by 64 bit builds of SAS, 'Align' means that the offset of this data field should be advanced so that the offset is a factor of 8 bytes. For files generated by 32 bit builds of SAS, the alignment is 4 bytes. Because `SAS7BDAT Packed Binary Data`_ potentially consist of doubles, it seems that all data rows are 64 bit aligned, regardless of whether the file was written with a 32 bit or 64 bit build of SAS. Alignment of data structures according to the platform word length (4 bytes for 32 bit, and 8 bytes for 64 bit architectures) facilitates efficient operations on data stored in memory. It also suggests that parts of SAS7BDAT data file format are platform dependent. One theory is that the SAS implementation utilizes a common C or C++ structure or class to reference data stored in memory. When compiled, these structures are aligned according to the word length of the target platform. Of course, when SAS was originally written, platform differences may not have been forseeable. Hence, these inconsistencies may not have been intentional.
+In files generated by 64 bit builds of SAS, 'alignment' means that all data field offsets should be a factor of 8 bytes. For files generated by 32 bit builds of SAS, the alignment is 4 bytes. Because `SAS7BDAT Packed Binary Data`_ potentially consist of doubles, it seems that all data rows are 64 bit aligned, regardless of whether the file was written with a 32 bit or 64 bit build of SAS. Alignment of data structures according to the platform word length (4 bytes for 32 bit, and 8 bytes for 64 bit architectures) facilitates efficient operations on data stored in memory. It also suggests that parts of SAS7BDAT data file format are platform dependent. One theory is that the SAS implementation utilizes a common C or C++ structure or class to reference data stored in memory. When compiled, these structures are aligned according to the word length of the target platform. Of course, when SAS was originally written, platform differences may not have been forseeable. Hence, these inconsistencies may not have been intentional.
 
 Magic Number
 ------------
@@ -131,6 +139,23 @@ The SAS7BDAT magic number is the following 32 byte (hex) sequence.::
    00 00 00 00   c2 ea 81 60
    b3 14 11 cf   bd 92 08 00
    09 c7 31 8c   18 1f 10 11
+
+In all test files except one, the magic number above holds. The one anomalous file has the following magic number::
+
+   00 00 00 00   00 00 00 00
+   00 00 00 00   00 00 00 00 
+   00 00 00 00   00 00 00 00 
+   00 00 00 00   18 1f 10 11
+
+In addition, the file is associated with the SAS release "3.2TK". Indeed, this file may not have been written by SAS. Otherwise, the anomalous appears to be similar to other test files.
+
+
+Other Notes
+-----------
+From Clint Cummins (yet to be incorporated properly into this document, or the prototype reader):
+
+    1A. If byte at offset 35 = 33h,  there is a 4 byte filler 00 00 00 00 inserted at offset 164 (between "file type" and "time stamp")
+    1B. If byte at offset 32 = 33h,  there are 4 extra bytes inserted somewhere between "time stamp" and "release". All these files are Linux or SunOS with IOA=8, and none of them have valid PS or PC at the expected positions. So all we really know about them is where the release and host fields are.
 
 SAS7BDAT Pages
 ==============
@@ -148,7 +173,7 @@ offset		length	conf.	description
 0		4	low	*????????????* (sometimes repeated) 
 4		8	low	*????????????* (not critical)
 12		4	low	*????????????* row/col related (not critical)
-16		2	medium	int, page type meta/data/mix/amd (0/256/512/1024)
+16		2	medium	int, bit field `page type`_
 18 (meta/mix)	2	low	*????????????*
 20 (meta/mix)	2	medium	int, number of `subheader pointers`_ := L
 22 (meta/mix)	2	low	*????????????*
@@ -158,6 +183,11 @@ M+M%8   (mix)	%PS	medium	`SAS7BDAT packed binary data`_
 18 (data)       4	medium	int, page row count 
 24 (data)	%PS	medium  `SAS7BDAT packed binary data`_	
 ==============  ======  ======  ===============================================
+
+Page Type
+---------
+
+There are at least four page types 'meta', 'data', 'mix', and 'amd'. These types are encoded in the most significant byte of a two byte bit field at offset 16. If no bit is set, the following page is of type 'meta'. If the first, second, or third bits are set, then the page is of type 'data', 'mix', or 'amd', respectively. Hence, if the two bytes are interpreted as an unsigned integer, then the 'meta', 'data', 'mix', and 'amd' types correspond to 0, 256, 512, and 1024, respectively. In compressed files, other bits (and sometimes multiple bits) have been set (e.g., ``1 << 16 | 1 << 13``, which is ``-28672`` signed, or ``36864`` unsigned). However, the pattern is unclear.
 
 If a page is of type 'meta', 'mix', or 'amd', data beginning at offset byte 24 are a sequence of L 12-byte `subheader pointers`_, which point to an offset farther down the page. `SAS7BDAT Subheaders`_ stored at these offsets hold meta information about the database, including the column names, labels, and types.    
 
@@ -292,9 +322,7 @@ offset		length	conf.	description
 76		%H	high	ascii, combined column names, labels, formats
 ==============  ======  ======  ===============================================
 
-This subheader sometimes appears more than once; each is a separate array.
-If so, the "column name index" field in `column name pointers`_ selects a particular text array - 0 for the first array, 1 for the second, etc.
-Similarly, "column format index" and "column label index" fields also select a text array.
+This subheader sometimes appears more than once; each is a separate array. If so, the "column name index" field in `column name pointers`_ selects a particular text array - 0 for the first array, 1 for the second, etc. Similarly, "column format index" and "column label index" fields also select a text array. For compressed files, the type of compression is indicated within the field at offset 16 of the first column text subheader. In particular, if the first eight bytes are ascii "SASYZCRL", then the file was generated with the option COMPRESS=YES, and data are apparently compressed using a simple run-length encoding (RLE) algorithm. 
 
 Column Name Subheader
 ---------------------

@@ -14,6 +14,104 @@
 #    with this program; if not, write to the Free Software Foundation, Inc.,
 #    51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 
+# Download all files listed in sas7bdat.sources
+# path - where to save files
+# max.size - limit on the size of downloaded files (bytes)
+download.sas7bdat.sources <- function(ss, path=normalizePath("."), max.size=2^20) {
+    # don't download zip files or files larger than max.size
+    ss <- subset(ss, !grepl(".zip$", ss$url) & ss$uncompressed < max.size)
+    if(!file.exists(path))
+        dir.create(path)
+    apply(ss, 1, function(r) download.file(r["url"], file.path(path, r["filename"])))
+}
+
+# Compress a file on disk
+# desc - file path
+# type - compression type ("gzip", "bzip2", "xz")
+file.compress <- function(desc, type = "gzip") {
+    if(type == "gzip") {
+        ext <- ".gz"; cfile <- gzfile
+    } else if(type == "bzip2") {
+        ext <- ".bz2"; cfile <- bzfile
+    } else if(type == "xz") {
+        ext <- ".xz"; cfile <- xzfile
+    } else {
+        stop("compression 'type' unrecognized")
+    }
+    inp <- file(desc, open="rb")
+    oup <- cfile(paste(desc, ext, sep=""), open="wb")
+    while(length(dat <- readBin(inp, "raw", 2^13)) > 0)
+        writeBin(dat, oup)
+    close(inp)
+    close(oup)
+    return(paste(desc, ext, sep=""))
+}
+
+# Generate an entry for sas7bdat.sources
+# fn - a local file name
+# url - url of the file
+generate.sas7bdat.source <- function(fn, url) {
+    dl <- try(download.file(url, fn))
+    if(inherits(dl, "try-error") || dl != 0)
+        return(FALSE)
+    sz <- file.info(fn)$size
+    cat("gzip compress...")
+    fn.gz <- file.compress(fn, "gzip")
+    sz.gz <- file.info(fn.gz)$size
+    cat("done\nbzip2 compress...")
+    fn.bz2 <- file.compress(fn, "bzip2")
+    sz.bz2 <- file.info(fn.bz2)$size
+    cat("done\nxz compress...")
+    fn.xz <- file.compress(fn, "xz")
+    sz.xz <- file.info(fn.xz)$size
+    cat("done\nparsing file...")
+    dat <- try(read.sas7bdat(fn))
+    cat("done\n")
+    if(!inherits(dat, "try-error")) {
+        as.character(attr(dat, 'timestamp')) -> timestamp
+        attr(dat, 'SAS.release') -> SAS_release
+        attr(dat, 'SAS.host')    -> SAS_host
+        attr(dat, 'OS.version')  -> OS_version
+        attr(dat, 'OS.maker')    -> OS_maker
+        attr(dat, 'OS.name')     -> OS_name
+        attr(dat, 'endianess')   -> endianess
+        attr(dat, 'winunix')     -> winunix
+        dat <- "OK"
+    } else {
+        timestamp   <- ""
+        SAS_release <- ""
+        SAS_host    <- ""
+        OS_version  <- ""
+        OS_maker    <- ""
+        OS_name     <- ""
+        endianess   <- ""
+        winunix     <- ""
+        dat <- dat[1]
+    }
+    data.frame(
+        filename = fn, accessed = Sys.time(), uncompressed = sz,
+        gzip = sz.gz, bzip2 = sz.bz2, xz = sz.xz, url = url,
+        PKGversion = VERSION, message = dat, timestamp = timestamp,
+        SASrelease = SAS_release, SAShost = SAS_host, OSversion = OS_version,
+        OSmaker = OS_maker, OSname = OS_name, endianess = endianess,
+        winunix = winunix, stringsAsFactors=FALSE)
+}
+
+update.sas7bdat.source <- function(df) {
+    re <- generate.sas7bdat.source(df$filename, df$url)
+    if(inherits(re, "logical")) return(df)
+    return(re)
+}
+
+
+# Update sas7bdat.sources
+update.sas7bdat.sources <- function(ss) {
+    for(i in 1:nrow(ss))
+        ss[i,] <- update.sas7bdat.source(ss[i,])
+    return(ss)
+}
+    
+VERSION   <- "0.2"
 BUGREPORT <- "please report bugs to sas7bdatRbugs@gmail.com"
 CAUTION   <- "please verify data correctness"
 
@@ -21,7 +119,9 @@ CAUTION   <- "please verify data correctness"
 KNOWNHOST <- c("WIN_PRO", "WIN_NT", "WIN_NTSV", "WIN_SRV",
                "WIN_ASRV", "XP_PRO", "XP_HOME", "NET_ASRV",
                "NET_DSRV", "NET_SRV", "WIN_98", "W32_VSPR",
-               "WIN", "WIN_95", "X64_VSPR", "X64_ESRV")
+               "WIN", "WIN_95", "X64_VSPR", "X64_ESRV",
+               "W32_ESRV", "W32_7PRO", "W32_VSHO", "X64_7HOM",
+               "X64_7PRO", "X64_SRV0", "W32_SRV0", "Linux")
 
 # Subheader 'signatures'
 SUBH_ROWSIZE <- as.raw(c(0xF7,0xF7,0xF7,0xF7))
@@ -35,9 +135,9 @@ SUBH_SUBHCNT <- as.raw(c(0x00,0xFC,0xFF,0xFF))
 
 # Page types
 PAGE_META <- 0
-PAGE_DATA <- 256
-PAGE_MIX  <- 512
-PAGE_AMD  <- 1024
+PAGE_DATA <- 256        #1<<8
+PAGE_MIX  <- c(512,640) #1<<9,1<<9|1<<7
+PAGE_AMD  <- 1024       #1<<10
 PAGE_MIX_DATA <- c(PAGE_MIX, PAGE_DATA)
 PAGE_META_MIX_AMD <- c(PAGE_META, PAGE_MIX, PAGE_AMD)
 PAGE_ANY  <- c(PAGE_META_MIX_AMD, PAGE_DATA)
@@ -120,11 +220,6 @@ read_column_attributes <- function(col_attr) {
     return(info)
 }
 
-# Alignment
-ALIGN_64     <- as.raw(c(0x33,0x33))
-ALIGN_32     <- as.raw(c(0x32,0x22))
-
-
 # Magic number
 MAGIC     <- as.raw(c(0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
                       0x0, 0x0, 0x0, 0x0, 0xc2,0xea,0x81,0x60,
@@ -176,44 +271,78 @@ read.sas7bdat <- function(file) {
         stop("invalid 'file' argument")
     }
 
+    
     # Check magic number
-    header <- readBin(con, "raw", 1024, 1)
-    if(length(header) < 1024)
+    header <- readBin(con, "raw", 288, 1)
+    if(length(header) < 288)
         stop("header too short (not a sas7bdat file?)")
     if(!check_magic_number(header))
         stop(paste("magic number mismatch", BUGREPORT))
 
     # Check for 32 or 64 bit alignment
-    align <- read_raw(header, 35, 2)
-    if(identical(align, ALIGN_32)) {
-        halign <- 0 
-    } else if(identical(align, ALIGN_64)) {
-        halign <- 4 
+    align1 <- read_raw(header, 32, 1)
+    if(identical(align1, as.raw(0x33))) {
+        align1 <- 4
     } else {
-        stop(paste("unrecognized alignment code",
-            paste(align, collapse=''), BUGREPORT))
+        align1 <- 0
     }
-    
+
+    align2 <- read_raw(header, 35, 1)
+    if(identical(align2, as.raw(0x33))) {
+        align2 <- 4
+    } else {
+        align2 <- 0
+    }
+
+    endianess <- read_raw(header, 37, 1)
+    if(identical(endianess, as.raw(0x01))) {
+        endianess <- "little"
+    } else {
+        endianess <- "big"
+        stop("big endian files are not supported")
+    }
+
+    winunix <- read_str(header, 39, 1)
+    if(identical(winunix, "1")) {
+        winunix <- "unix"
+    } else if(identical(winunix, "2")) {
+        winunix <- "windows"
+    } else {
+        winunix <- "unknown"
+    }   
+
     # Timestamp is epoch 01/01/1960
-    timestamp <- read_flo(header,164 + halign,8)
+    timestamp <- read_flo(header, 164+align1, 8)
     timestamp <- chron(timestamp, origin.=c(month=1, day=1, year=1960)) 
+    
+    # Read the remaining header
+    header_length <- read_int(header, 196+align2, 4)
+    header <- c(header, readBin(con, "raw", header_length-288, 1))
+    if(length(header) < header_length)
+        stop("header too short (not a sas7bdat file?)")
 
 
-    page_size   <- read_int(header, 200 + halign, 4)
+
+    page_size   <- read_int(header, 200 + align2, 4)
     if(page_size < 0)
         stop(paste("page size is negative", BUGREPORT))
 
-    page_count  <- read_int(header, 204 + halign, 4)
+    page_count  <- read_int(header, 204 + align2, 4)
     if(page_count < 1)
         stop(paste("page count is not positive", BUGREPORT))
     
 
-    SAS_release <- read_str(header, 216 + halign, 8)
-    SAS_host    <- read_str(header, 224 + halign, 8)
+    SAS_release <- read_str(header, 216 + align1 + align2, 8)
+
+    # SAS_host is a 16 byte field, but only the first eight are used
+    SAS_host    <- read_str(header, 224 + align1 + align2, 8)
     if(!(SAS_host %in% KNOWNHOST))
         stop(paste("unknown host", SAS_host, BUGREPORT))
 
-    
+    OS_version  <- read_str(header, 240 + align1 + align2, 16) 
+    OS_maker    <- read_str(header, 256 + align1 + align2, 16) 
+    OS_name     <- read_str(header, 272 + align1 + align2, 16) 
+
     # Read pages
     pages <- list()
     for(page_num in 1:page_count) {
@@ -225,38 +354,10 @@ read.sas7bdat <- function(file) {
             pages[[page_num]]$subh_count <- read_int(pages[[page_num]]$data, 20, 2)
     }
 
-    if(any(sapply(pages, function(page) !(page$type %in% PAGE_ANY))))
-        stop(paste("page", page_num, "has unknown type:",
-            pages[[page_num]]$type, BUGREPORT))
-
     # Read subheaders
     subhs <- list()
     for(page in pages)
         subhs <- c(subhs, read_subheaders(page)) 
-
-    # Parse subheaders
-
-    # Parse subheader count subheader
-    # At present, the data stored in this subheader is not
-    # necessary, but might be used in the future for verification.
-    # The column attribute, text, name, and list subheaders are 
-    # known to occur multiple times.
-
-    #subh_cnt <- get_subhs(subhs, SUBH_SUBHCNT)
-    #if(length(subh_cnt) != 1)
-    #    stop(paste("found", length(subh_cnt),
-    #        "subheader count subheaders where 1 expected", BUGREPORT))
-    #subh_cnt <- subh_cnt[[1]]
-    #subh_cnts <- list()
-    #for(scnt in 1:11) {
-    #    base <- 84 + (scnt - 1) * 20
-    #    subh_cnts[[scnt]]       <- list()
-    #    subh_cnts[[scnt]]$sig   <- read_raw(subh_cnt$raw, base, 4)
-    #    subh_cnts[[scnt]]$page1 <- read_int(subh_cnt$raw, base + 4, 4)
-    #    subh_cnts[[scnt]]$loc1  <- read_int(subh_cnt$raw, base + 8, 4)
-    #    subh_cnts[[scnt]]$pagel <- read_int(subh_cnt$raw, base + 12, 4)
-    #    subh_cnts[[scnt]]$locl  <- read_int(subh_cnt$raw, base + 16, 4)
-    #}
 
     # Parse row size subheader
     row_size <- get_subhs(subhs, SUBH_ROWSIZE)
@@ -286,6 +387,10 @@ read.sas7bdat <- function(file) {
     col_text <- get_subhs(subhs, SUBH_COLTEXT)
     if(length(col_text) < 1)
         stop(paste("no column text subheaders found", BUGREPORT))
+
+    # Test for COMPRESS=CHAR compression
+    if("SASYZCRL" == read_str(col_text[[1]]$raw, 16, 8))
+        stop(paste("file uses unsupported CHAR compression"))
 
     col_attr <- get_subhs(subhs, SUBH_COLATTR)            
     if(length(col_attr) < 1)
@@ -317,6 +422,37 @@ read.sas7bdat <- function(file) {
     for(i in 1:col_count)
         col_info[[i]] <- c(col_name[[i]], col_attr[[i]], col_labs[[i]]) 
 
+    # Check pages for known type 
+    for(page_num in 1:page_count)
+        if(!(pages[[page_num]]$type %in% PAGE_ANY))
+            stop(paste("page", page_num, "has unknown type:",
+                pages[[page_num]]$type, BUGREPORT))
+
+    # Parse subheaders
+
+    # Parse subheader count subheader
+    # At present, the data stored in this subheader is not
+    # necessary, but might be used in the future for verification.
+    # The column attribute, text, name, and list subheaders are 
+    # known to occur multiple times.
+
+    #subh_cnt <- get_subhs(subhs, SUBH_SUBHCNT)
+    #if(length(subh_cnt) != 1)
+    #    stop(paste("found", length(subh_cnt),
+    #        "subheader count subheaders where 1 expected", BUGREPORT))
+    #subh_cnt <- subh_cnt[[1]]
+    #subh_cnts <- list()
+    #for(scnt in 1:11) {
+    #    base <- 84 + (scnt - 1) * 20
+    #    subh_cnts[[scnt]]       <- list()
+    #    subh_cnts[[scnt]]$sig   <- read_raw(subh_cnt$raw, base, 4)
+    #    subh_cnts[[scnt]]$page1 <- read_int(subh_cnt$raw, base + 4, 4)
+    #    subh_cnts[[scnt]]$loc1  <- read_int(subh_cnt$raw, base + 8, 4)
+    #    subh_cnts[[scnt]]$pagel <- read_int(subh_cnt$raw, base + 12, 4)
+    #    subh_cnts[[scnt]]$locl  <- read_int(subh_cnt$raw, base + 16, 4)
+    #}
+
+
     # Parse data
     data  <- list()
     for(col in col_info)
@@ -328,7 +464,7 @@ read.sas7bdat <- function(file) {
         #FIXME are there data on pages of type 4?
         if(!(page$type %in% PAGE_MIX_DATA))
             next 
-        if(page$type == PAGE_MIX) {
+        if(page$type %in% PAGE_MIX) {
             row_count_p <- row_count_fp
             base <- 24 + page$subh_count * 12
             base <- base + base %% 8
@@ -370,5 +506,10 @@ read.sas7bdat <- function(file) {
     attr(data, 'timestamp')   <- timestamp
     attr(data, 'SAS.release') <- SAS_release
     attr(data, 'SAS.host')    <- SAS_host
+    attr(data, 'OS.version')  <- OS_version
+    attr(data, 'OS.maker')    <- OS_maker
+    attr(data, 'OS.name')     <- OS_name
+    attr(data, 'endianess')   <- endianess
+    attr(data, 'winunix')     <- winunix
     return(data)
 }
