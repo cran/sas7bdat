@@ -1,14 +1,15 @@
 Package: sas7bdat
 Type: Package
 Title: SAS Database Reader (experimental)
-Version: 0.3
-Date: 2012-11-02
-Author: Matthew S. Shotwell
-Maintainer: Matthew S. Shotwell <matt.shotwell@vanderbilt.edu>
+Version: 0.4
+Date: 2014-03-05
+Author: Matt Shotwell
+Maintainer: Matt Shotwell <matt.shotwell@vanderbilt.edu>
 Description: Read SAS files in the sas7bdat data format.
 Depends: R (>= 2.10), chron
 License: GPL (>= 2)
 LazyLoad: yes
-Packaged: 2012-11-02 17:53:07 UTC; matt
+Packaged: 2014-03-06 15:10:44 UTC; matt
+NeedsCompilation: no
 Repository: CRAN
-Date/Publication: 2012-11-02 18:17:52
+Date/Publication: 2014-03-06 22:18:13
