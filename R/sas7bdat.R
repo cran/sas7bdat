@@ -1,4 +1,4 @@
-#    Copyright (C) 2011 Matt Shotwell, VUMC
+#    Copyright (C) 2014 Matt Shotwell, VUMC
 #
 #    This program is free software; you can redistribute it and/or modify
 #    it under the terms of the GNU General Public License as published by
@@ -17,12 +17,14 @@
 # Download all files listed in sas7bdat.sources
 # path - where to save files
 # max.size - limit on the size of downloaded files (bytes)
-download.sas7bdat.sources <- function(ss, path=normalizePath("."), max.size=2^20) {
+download.sas7bdat.sources <-
+  function(ss, path=normalizePath("."), max.size=2^20) {
     # don't download zip files or files larger than max.size
     ss <- subset(ss, !grepl(".zip$", ss$url) & ss$uncompressed < max.size)
     if(!file.exists(path))
         dir.create(path)
-    apply(ss, 1, function(r) download.file(r["url"], file.path(path, r["filename"])))
+    apply(ss, 1, function(r)
+      download.file(r["url"], file.path(path, r["filename"])))
 }
 
 # Compress a file on disk
@@ -68,33 +70,36 @@ generate.sas7bdat.source <- function(fn, url) {
     dat <- try(read.sas7bdat(fn))
     cat("done\n")
     if(!inherits(dat, "try-error")) {
-        as.character(attr(dat, 'timestamp')) -> timestamp
+        # the two date variables below are not used 
+        as.character(attr(dat, 'date.created')) -> datecreated 
+        as.character(attr(dat, 'date.modified')) -> datemodified
         attr(dat, 'SAS.release') -> SAS_release
         attr(dat, 'SAS.host')    -> SAS_host
         attr(dat, 'OS.version')  -> OS_version
         attr(dat, 'OS.maker')    -> OS_maker
         attr(dat, 'OS.name')     -> OS_name
-        attr(dat, 'endianess')   -> endianess
+        attr(dat, 'endian')      -> endian
         attr(dat, 'winunix')     -> winunix
         dat <- "OK"
     } else {
-        timestamp   <- ""
-        SAS_release <- ""
-        SAS_host    <- ""
-        OS_version  <- ""
-        OS_maker    <- ""
-        OS_name     <- ""
-        endianess   <- ""
-        winunix     <- ""
+        datecreated  <- ""
+        datemodified <- ""
+        SAS_release  <- ""
+        SAS_host     <- ""
+        OS_version   <- ""
+        OS_maker     <- ""
+        OS_name      <- ""
+        endian       <- ""
+        winunix      <- ""
         dat <- dat[1]
     }
     data.frame(
         filename = fn, accessed = Sys.time(), uncompressed = sz,
         gzip = sz.gz, bzip2 = sz.bz2, xz = sz.xz, url = url,
-        PKGversion = VERSION, message = dat, timestamp = timestamp,
-        SASrelease = SAS_release, SAShost = SAS_host, OSversion = OS_version,
-        OSmaker = OS_maker, OSname = OS_name, endianess = endianess,
-        winunix = winunix, stringsAsFactors=FALSE)
+        PKGversion = VERSION, message = dat, SASrelease = SAS_release,
+        SAShost = SAS_host, OSversion = OS_version, OSmaker = OS_maker,
+        OSname = OS_name, endian = endian, winunix = winunix,
+        stringsAsFactors=FALSE)
 }
 
 update.sas7bdat.source <- function(df) {
@@ -111,8 +116,8 @@ update.sas7bdat.sources <- function(ss) {
     return(ss)
 }
     
-VERSION   <- "0.2"
-BUGREPORT <- "please report bugs to sas7bdatRbugs@gmail.com"
+VERSION   <- "0.5"
+BUGREPORT <- "please report bugs to maintainer"
 CAUTION   <- "please verify data correctness"
 
 # Host systems known to work
@@ -121,7 +126,8 @@ KNOWNHOST <- c("WIN_PRO", "WIN_NT", "WIN_NTSV", "WIN_SRV",
                "NET_DSRV", "NET_SRV", "WIN_98", "W32_VSPR",
                "WIN", "WIN_95", "X64_VSPR", "X64_ESRV",
                "W32_ESRV", "W32_7PRO", "W32_VSHO", "X64_7HOM",
-               "X64_7PRO", "X64_SRV0", "W32_SRV0", "Linux")
+               "X64_7PRO", "X64_SRV0", "W32_SRV0", "X64_ES08",
+               "Linux")
 
 # Subheader 'signatures'
 SUBH_ROWSIZE <- as.raw(c(0xF7,0xF7,0xF7,0xF7))
@@ -138,22 +144,42 @@ PAGE_META <- 0
 PAGE_DATA <- 256        #1<<8
 PAGE_MIX  <- c(512,640) #1<<9,1<<9|1<<7
 PAGE_AMD  <- 1024       #1<<10
+PAGE_METC <- 16384      #1<<14 (compressed data)
+PAGE_COMP <- -28672     #~(1<<14|1<<13|1<<12) 
 PAGE_MIX_DATA <- c(PAGE_MIX, PAGE_DATA)
 PAGE_META_MIX_AMD <- c(PAGE_META, PAGE_MIX, PAGE_AMD)
-PAGE_ANY  <- c(PAGE_META_MIX_AMD, PAGE_DATA)
+PAGE_ANY  <- c(PAGE_META_MIX_AMD, PAGE_DATA, PAGE_METC, PAGE_COMP)
 
-read_subheaders <- function(page) {
+page_type_strng <- function(type) {
+    if(type %in% PAGE_META)
+        return('meta')
+    if(type %in% PAGE_DATA)
+        return('data')
+    if(type %in% PAGE_MIX)
+        return('mix')
+    if(type %in% PAGE_AMD)
+        return('amd')
+    return('unknown')
+}
+
+read_subheaders <- function(page, u64) {
     subhs <- list()
     subh_total <- 0
     if(!(page$type %in% PAGE_META_MIX_AMD))
         return(subhs)
+    # page offset of subheader pointers
+    oshp <- if(u64) 40 else 24
+    # length of subheader pointers
+    lshp <- if(u64) 24 else 12
+    # length of first two subheader fields
+    lshf <- if(u64) 8  else 4
     for(i in 1:page$subh_count) {
         subh_total <- subh_total + 1
-        base <- 24 + (i - 1) * 12
+        base <- oshp + (i - 1) * lshp
         subhs[[subh_total]] <- list()
         subhs[[subh_total]]$page <- page$page 
-        subhs[[subh_total]]$offset <- read_int(page$data, base, 4)
-        subhs[[subh_total]]$length <- read_int(page$data, base + 4, 4)
+        subhs[[subh_total]]$offset <- read_int(page$data, base, lshf)
+        subhs[[subh_total]]$length <- read_int(page$data, base + lshf, lshf)
         if(subhs[[subh_total]]$length > 0) {
             subhs[[subh_total]]$raw <- read_raw(page$data, 
                 subhs[[subh_total]]$offset, subhs[[subh_total]]$length)
@@ -163,58 +189,77 @@ read_subheaders <- function(page) {
     return(subhs)
 }
 
-read_column_names <- function(col_name, col_text) {
+read_column_names <- function(col_name, col_text, u64) {
     names <- list()
     name_count <- 0
+    offp <- if(u64) 8 else 4
     for(subh in col_name) {
-        for(i in 1:((subh$length - 20)/8)) {
+        cmax <- (subh$length - if(u64) 28 else 20)/8
+        for(i in 1:cmax) {
             name_count <- name_count + 1
             names[[name_count]] <- list()
-            base <- 12 + (i-1) * 8
-            txt  <- read_int(subh$raw, base, 2)
-            off  <- read_int(subh$raw, base + 2, 2) + 4
+            base <- (if(u64) 16 else 12) + (i-1) * 8
+            hdr  <- read_int(subh$raw, base, 2)
+            off  <- read_int(subh$raw, base + 2, 2)
             len  <- read_int(subh$raw, base + 4, 2)
-            names[[name_count]]$name <- read_str(col_text[[txt+1]]$raw, off, len)
+            names[[name_count]]$name <- read_str(col_text[[hdr+1]]$raw,
+                                                 off + offp, len)
         }
     }
     return(names)
 }
 
-read_column_labels_formats <- function(col_labs, col_text) {
+read_column_labels_formats <- function(col_labs, col_text, u64) {
     if(length(col_labs) < 1)
         return(NULL)
+    offp <- if(u64) 8  else 4
     labs <- list()
     for(i in 1:length(col_labs)) {
         labs[[i]] <- list()
-        base <- 34
-        txt  <- read_int(col_labs[[i]]$raw, base, 2)
-        off  <- read_int(col_labs[[i]]$raw, base + 2, 2) + 4
+        base <- if(u64) 46 else 34
+        hdr  <- read_int(col_labs[[i]]$raw, base, 2)
+        off  <- read_int(col_labs[[i]]$raw, base + 2, 2)
         len  <- read_int(col_labs[[i]]$raw, base + 4, 2)
         if(len > 0)
-            labs[[i]]$format <- read_str(col_text[[txt+1]]$raw, off, len)
-        base <- 40
-        txt  <- read_int(col_labs[[i]]$raw, base, 2)
-        off  <- read_int(col_labs[[i]]$raw, base + 2, 2) + 4
+            labs[[i]]$format <- read_str(col_text[[hdr+1]]$raw,
+                                         off + offp, len)
+        labs[[i]]$fhdr <- hdr;
+        labs[[i]]$foff <- off
+        labs[[i]]$flen <- len
+        base <- if(u64) 52 else 40
+        hdr  <- read_int(col_labs[[i]]$raw, base, 2)
+        off  <- read_int(col_labs[[i]]$raw, base + 2, 2)
         len  <- read_int(col_labs[[i]]$raw, base + 4, 2)
         if(len > 0)
-            labs[[i]]$label <- read_str(col_text[[txt+1]]$raw, off, len)
+            labs[[i]]$label <- read_str(col_text[[hdr+1]]$raw,
+                                        off + offp, len)
+        labs[[i]]$lhdr <- hdr;
+        labs[[i]]$loff <- off
+        labs[[i]]$llen <- len
     }
     return(labs)
 }
  
-read_column_attributes <- function(col_attr) {
+read_column_attributes <- function(col_attr, u64) {
     info <- list()
-    info_count <- 0
+    info_ct <- 0
+    lcav <- if(u64) 16 else 12
     for(subh in col_attr) {
-        for(i in 1:((subh$length-20)/12)) {
-            info_count <- info_count + 1
-            info[[info_count]] <- list()
-            base <- 12 + (i-1) * 12
-            info[[info_count]]$offset <- read_int(subh$raw, base, 4)
-            info[[info_count]]$length <- read_int(subh$raw, base + 4, 4)
-            info[[info_count]]$type   <- read_int(subh$raw, base + 10, 2)
-            info[[info_count]]$type   <- ifelse(info[[info_count]]$type == 1,
-            "numeric", "character")
+        cmax <- (subh$length - if(u64) 28 else 20)/lcav
+        for(i in 1:cmax) {
+            info_ct <- info_ct + 1
+            info[[info_ct]] <- list()
+            base <- lcav + (i-1) * lcav
+            info[[info_ct]]$offset <- read_int(subh$raw, base,
+                                               if(u64) 8 else 4)
+            info[[info_ct]]$length <- read_int(subh$raw,
+                                               base + if(u64) 8 else 4,
+                                               4)
+            info[[info_ct]]$type   <- read_int(subh$raw,
+                                               base + if(u64) 14 else 10,
+                                               1)
+            info[[info_ct]]$type   <- ifelse(info[[info_ct]]$type == 1,
+                                             "numeric", "character")
         }
     }
     return(info)
@@ -230,16 +275,16 @@ check_magic_number <- function(data)
     identical(data[1:length(MAGIC)], MAGIC)
 
 # These functions utilize offset + length addressing
-read_bin <- function(buf, off, len, type)
-    readBin(buf[(off+1):(off+len)], type, 1, len)
-read_raw <- function(buf, off, len)
-    readBin(buf[(off+1):(off+len)], "raw", len, 1)
-read_int <- function(buf, off, len)
-    read_bin(buf, off, len, "integer")
-read_str <- function(buf, off, len)
-    read_bin(buf, off, len, "character")
-read_flo <- function(buf, off, len)
-    read_bin(buf, off, len, "double")
+read_bin <- function(buf, off, len, type, ...)
+    readBin(buf[(off+1):(off+len)], type, 1, len, ...)
+read_raw <- function(buf, off, len, ...)
+    readBin(buf[(off+1):(off+len)], "raw", len, 1, ...)
+read_int <- function(buf, off, len, ...)
+    read_bin(buf, off, len, "integer", ...)
+read_str <- function(buf, off, len, ...)
+    read_bin(buf, off, len, "character", ...)
+read_flo <- function(buf, off, len, ...)
+    read_bin(buf, off, len, "double", ...)
 
 get_subhs <- function(subhs, signature) {
     keep <- sapply(subhs, function(subh) {
@@ -259,7 +304,7 @@ splice_col_attr_subheaders <- function(col_attr) {
     return(list(raw=raw))
 }
 
-read.sas7bdat <- function(file) {
+read.sas7bdat <- function(file, debug=FALSE) {
     if(inherits(file, "connection") && isOpen(file, "read")) {
         con <- file
         close_con <- FALSE
@@ -286,6 +331,13 @@ read.sas7bdat <- function(file) {
         align1 <- 0
     }
 
+    # If align1 == 4, file is u64 type
+    if(align1 == 4) {
+        u64 <- TRUE
+    } else {
+        u64 <- FALSE
+    }
+
     align2 <- read_raw(header, 35, 1)
     if(identical(align2, as.raw(0x33))) {
         align2 <- 4
@@ -293,11 +345,11 @@ read.sas7bdat <- function(file) {
         align2 <- 0
     }
 
-    endianess <- read_raw(header, 37, 1)
-    if(identical(endianess, as.raw(0x01))) {
-        endianess <- "little"
+    endian <- read_raw(header, 37, 1)
+    if(identical(endian, as.raw(0x01))) {
+        endian <- "little"
     } else {
-        endianess <- "big"
+        endian <- "big"
         stop("big endian files are not supported")
     }
 
@@ -311,16 +363,16 @@ read.sas7bdat <- function(file) {
     }   
 
     # Timestamp is epoch 01/01/1960
-    timestamp <- read_flo(header, 164+align1, 8)
-    timestamp <- chron(timestamp, origin.=c(month=1, day=1, year=1960)) 
+    datecreated <- read_flo(header, 164+align1, 8)
+    datecreated <- datecreated + as.POSIXct("1960/01/01", format="%Y/%m/%d")
+    datemodified <- read_flo(header, 172+align1, 8)
+    datemodified <- datemodified + as.POSIXct("1960/01/01", format="%Y/%m/%d")
     
     # Read the remaining header
-    header_length <- read_int(header, 196+align2, 4)
+    header_length <- read_int(header, 196 + align2, 4)
     header <- c(header, readBin(con, "raw", header_length-288, 1))
     if(length(header) < header_length)
         stop("header too short (not a sas7bdat file?)")
-
-
 
     page_size   <- read_int(header, 200 + align2, 4)
     if(page_size < 0)
@@ -334,9 +386,10 @@ read.sas7bdat <- function(file) {
     SAS_release <- read_str(header, 216 + align1 + align2, 8)
 
     # SAS_host is a 16 byte field, but only the first eight are used
+    # FIXME: It would be preferable to eliminate this check
     SAS_host    <- read_str(header, 224 + align1 + align2, 8)
-    if(!(SAS_host %in% KNOWNHOST))
-        stop(paste("unknown host", SAS_host, BUGREPORT))
+    #if(!(SAS_host %in% KNOWNHOST))
+    #    stop(paste("unknown host", SAS_host, BUGREPORT))
 
     OS_version  <- read_str(header, 240 + align1 + align2, 16) 
     OS_maker    <- read_str(header, 256 + align1 + align2, 16) 
@@ -348,15 +401,16 @@ read.sas7bdat <- function(file) {
         pages[[page_num]] <- list()
         pages[[page_num]]$page <- page_num
         pages[[page_num]]$data <- readBin(con, "raw", page_size, 1)
-        pages[[page_num]]$type <- read_int(pages[[page_num]]$data, 16, 2)
-        if(pages[[page_num]]$type %in%  PAGE_META_MIX_AMD)
-            pages[[page_num]]$subh_count <- read_int(pages[[page_num]]$data, 20, 2)
+        pages[[page_num]]$type <- read_int(pages[[page_num]]$data, if(u64) 32 else 16, 2)
+        pages[[page_num]]$type_strng <- page_type_strng(pages[[page_num]]$type)
+        pages[[page_num]]$blck_count <- read_int(pages[[page_num]]$data, if(u64) 34 else 18, 2) 
+        pages[[page_num]]$subh_count <- read_int(pages[[page_num]]$data, if(u64) 36 else 20, 2)
     }
 
-    # Read subheaders
+    # Read all subheaders
     subhs <- list()
     for(page in pages)
-        subhs <- c(subhs, read_subheaders(page)) 
+        subhs <- c(subhs, read_subheaders(page, u64)) 
 
     # Parse row size subheader
     row_size <- get_subhs(subhs, SUBH_ROWSIZE)
@@ -364,11 +418,21 @@ read.sas7bdat <- function(file) {
         stop(paste("found", length(row_size),
             "row size subheaders where 1 expected", BUGREPORT))
     row_size <- row_size[[1]]
-    row_length   <- read_int(row_size$raw, 20, 4)
-    row_count    <- read_int(row_size$raw, 24, 4)
-    col_count_p1 <- read_int(row_size$raw, 36, 4)
-    col_count_p2 <- read_int(row_size$raw, 40, 4)
-    row_count_fp <- read_int(row_size$raw, 60, 4)
+    row_length   <- read_int(row_size$raw,
+                             if(u64) 40 else 20,
+                             if(u64) 8  else 4)
+    row_count    <- read_int(row_size$raw,
+                             if(u64) 48 else 24,
+                             if(u64) 8  else 4)
+    col_count_p1 <- read_int(row_size$raw,
+                             if(u64) 72 else 36,
+                             if(u64) 8  else 4)
+    col_count_p2 <- read_int(row_size$raw,
+                             if(u64) 80 else 40,
+                             if(u64) 8  else 4)
+    row_count_fp <- read_int(row_size$raw,
+                             if(u64) 120 else 60,
+                             if(u64) 8   else 4)
 
     # Parse col size subheader
     col_size <- get_subhs(subhs, SUBH_COLSIZE)
@@ -376,7 +440,9 @@ read.sas7bdat <- function(file) {
         stop(paste("found", length(col_size),
             "column size subheaders where 1 expected", BUGREPORT))
     col_size <- col_size[[1]]
-    col_count_6  <- read_int(col_size$raw, 4, 4)
+    col_count_6  <- read_int(col_size$raw,
+                             if(u64) 8 else 4,
+                             if(u64) 8 else 4)
     col_count    <- col_count_6
 
     #if((col_count_p1 + col_count_p2) != col_count_6)
@@ -388,13 +454,15 @@ read.sas7bdat <- function(file) {
         stop(paste("no column text subheaders found", BUGREPORT))
 
     # Test for COMPRESS=CHAR compression
-    if("SASYZCRL" == read_str(col_text[[1]]$raw, 16, 8))
-        stop(paste("file uses unsupported CHAR compression"))
+    # This test is done earlier at the page level
+    #if("SASYZCRL" == read_str(col_text[[1]]$raw, 16, 8))
+    #    stop(paste("file uses unsupported CHAR compression"))
 
     col_attr <- get_subhs(subhs, SUBH_COLATTR)            
     if(length(col_attr) < 1)
         stop(paste("no column attribute subheaders found", BUGREPORT))
-    col_attr <- read_column_attributes(col_attr)
+
+    col_attr <- read_column_attributes(col_attr, u64)
     if(length(col_attr) != col_count)
         stop(paste("found", length(col_attr), 
             "column attributes where", col_count,
@@ -403,13 +471,19 @@ read.sas7bdat <- function(file) {
     col_name <- get_subhs(subhs, SUBH_COLNAME)
     if(length(col_name) < 1)
         stop(paste("no column name subheaders found", BUGREPORT))
-    col_name <- read_column_names(col_name, col_text)
+
+    col_name <- read_column_names(col_name, col_text, u64)
     if(length(col_name) != col_count)
         stop(paste("found", length(col_name), 
             "column names where", col_count, "expected", BUGREPORT))
 
+    # Make column names unique, if not already
+    col_name_uni <- make.unique(sapply(col_name, function(x)x$name)) 
+    for(i in 1:length(col_name_uni))
+        col_name[[i]]$name <- col_name_uni[i]
+
     col_labs <- get_subhs(subhs, SUBH_COLLABS)
-    col_labs <- read_column_labels_formats(col_labs, col_text)
+    col_labs <- read_column_labels_formats(col_labs, col_text, u64)
     if(is.null(col_labs))
         col_labs <- list(length=col_count)
     if(length(col_labs) != col_count)
@@ -422,36 +496,14 @@ read.sas7bdat <- function(file) {
         col_info[[i]] <- c(col_name[[i]], col_attr[[i]], col_labs[[i]]) 
 
     # Check pages for known type 
-    for(page_num in 1:page_count)
+    for(page_num in 1:page_count) {
         if(!(pages[[page_num]]$type %in% PAGE_ANY))
             stop(paste("page", page_num, "has unknown type:",
                 pages[[page_num]]$type, BUGREPORT))
-
-    # Parse subheaders
-
-    # Parse subheader count subheader
-    # At present, the data stored in this subheader is not
-    # necessary, but might be used in the future for verification.
-    # The column attribute, text, name, and list subheaders are 
-    # known to occur multiple times.
-
-    #subh_cnt <- get_subhs(subhs, SUBH_SUBHCNT)
-    #if(length(subh_cnt) != 1)
-    #    stop(paste("found", length(subh_cnt),
-    #        "subheader count subheaders where 1 expected", BUGREPORT))
-    #subh_cnt <- subh_cnt[[1]]
-    #subh_cnts <- list()
-    #for(scnt in 1:11) {
-    #    base <- 84 + (scnt - 1) * 20
-    #    subh_cnts[[scnt]]       <- list()
-    #    subh_cnts[[scnt]]$sig   <- read_raw(subh_cnt$raw, base, 4)
-    #    subh_cnts[[scnt]]$page1 <- read_int(subh_cnt$raw, base + 4, 4)
-    #    subh_cnts[[scnt]]$loc1  <- read_int(subh_cnt$raw, base + 8, 4)
-    #    subh_cnts[[scnt]]$pagel <- read_int(subh_cnt$raw, base + 12, 4)
-    #    subh_cnts[[scnt]]$locl  <- read_int(subh_cnt$raw, base + 16, 4)
-    #}
-
-
+        if(pages[[page_num]]$type %in% c(PAGE_METC, PAGE_COMP))
+            stop("file contains compressed data")
+    }
+        
     # Parse data
     data  <- list()
     for(col in col_info)
@@ -463,14 +515,17 @@ read.sas7bdat <- function(file) {
         #FIXME are there data on pages of type 4?
         if(!(page$type %in% PAGE_MIX_DATA))
             next 
+        base <- (if(u64) 32 else 16) + 8
         if(page$type %in% PAGE_MIX) {
             row_count_p <- row_count_fp
-            base <- 24 + page$subh_count * 12
+            # skip subheader pointers
+            base <- base + page$subh_count * if(u64) 24 else 12
             base <- base + base %% 8
         } else {
-            row_count_p <- read_int(page$data, 18, 4)
-            base <- 24
+            row_count_p <- read_int(page$data, if(u64) 34 else 18, 2)
         }
+        # round up to 8-byte boundary	
+        base <- ((base+7) %/% 8) * 8 + base %% 8
         if(row_count_p > row_count)
             row_count_p <- row_count
         for(row in (row+1):(row+row_count_p)) {
@@ -501,14 +556,18 @@ read.sas7bdat <- function(file) {
         close(con)
 
     data <- as.data.frame(data)
-    attr(data, 'column.info') <- col_info
-    attr(data, 'timestamp')   <- timestamp
-    attr(data, 'SAS.release') <- SAS_release
-    attr(data, 'SAS.host')    <- SAS_host
-    attr(data, 'OS.version')  <- OS_version
-    attr(data, 'OS.maker')    <- OS_maker
-    attr(data, 'OS.name')     <- OS_name
-    attr(data, 'endianess')   <- endianess
-    attr(data, 'winunix')     <- winunix
+    attr(data, 'pkg.version')   <- VERSION
+    attr(data, 'column.info')   <- col_info
+    attr(data, 'date.created')  <- datecreated
+    attr(data, 'date.modified') <- datemodified
+    attr(data, 'SAS.release')   <- SAS_release
+    attr(data, 'SAS.host')      <- SAS_host
+    attr(data, 'OS.version')    <- OS_version
+    attr(data, 'OS.maker')      <- OS_maker
+    attr(data, 'OS.name')       <- OS_name
+    attr(data, 'endian')        <- endian
+    attr(data, 'winunix')       <- winunix
+    if(debug)
+        attr(data, 'debug')     <- sys.frame(1)
     return(data)
 }
