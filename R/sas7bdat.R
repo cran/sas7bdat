@@ -1,4 +1,4 @@
-#    Copyright (C) 2014 Matt Shotwell, VUMC
+#    Copyright (C) 2015 Matt Shotwell, VUMC
 #
 #    This program is free software; you can redistribute it and/or modify
 #    it under the terms of the GNU General Public License as published by
@@ -119,15 +119,6 @@ update.sas7bdat.sources <- function(ss) {
 VERSION   <- "0.5"
 BUGREPORT <- "please report bugs to maintainer"
 CAUTION   <- "please verify data correctness"
-
-# Host systems known to work
-KNOWNHOST <- c("WIN_PRO", "WIN_NT", "WIN_NTSV", "WIN_SRV",
-               "WIN_ASRV", "XP_PRO", "XP_HOME", "NET_ASRV",
-               "NET_DSRV", "NET_SRV", "WIN_98", "W32_VSPR",
-               "WIN", "WIN_95", "X64_VSPR", "X64_ESRV",
-               "W32_ESRV", "W32_7PRO", "W32_VSHO", "X64_7HOM",
-               "X64_7PRO", "X64_SRV0", "W32_SRV0", "X64_ES08",
-               "Linux")
 
 # Subheader 'signatures'
 SUBH_ROWSIZE <- as.raw(c(0xF7,0xF7,0xF7,0xF7))
@@ -304,7 +295,7 @@ splice_col_attr_subheaders <- function(col_attr) {
     return(list(raw=raw))
 }
 
-read.sas7bdat <- function(file, debug=FALSE) {
+read.sas7bdat <- function(file, encoding="", debug=FALSE) {
     if(inherits(file, "connection") && isOpen(file, "read")) {
         con <- file
         close_con <- FALSE
@@ -388,8 +379,6 @@ read.sas7bdat <- function(file, debug=FALSE) {
     # SAS_host is a 16 byte field, but only the first eight are used
     # FIXME: It would be preferable to eliminate this check
     SAS_host    <- read_str(header, 224 + align1 + align2, 8)
-    #if(!(SAS_host %in% KNOWNHOST))
-    #    stop(paste("unknown host", SAS_host, BUGREPORT))
 
     OS_version  <- read_str(header, 240 + align1 + align2, 16) 
     OS_maker    <- read_str(header, 256 + align1 + align2, 16) 
@@ -538,10 +527,12 @@ read.sas7bdat <- function(file, debug=FALSE) {
                         col$length <- 8
                     }
                     data[[col$name]][row] <- readBin(raw, col$type, 1, col$length)
-                    # Strip beginning and trailing spaces
-                    if(col$type == "character")
+                    if(col$type == "character") {
+                        # Apply encoding
+                        Encoding(data[[col$name]][row]) <- encoding
+                        # Strip beginning and trailing spaces
                         data[[col$name]][row] <- gsub('^ +| +$', '', data[[col$name]][row])
-
+                    }
                 }
             }
             base <- base + row_length

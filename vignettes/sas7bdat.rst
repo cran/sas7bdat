@@ -82,7 +82,9 @@ offset		length	conf.	description
 40		8	low	*????????????*
 48		8	low	*????????????*
 56		8	low	repeat of 32:32+8
-64		20	low	*????????????*
+64		6	low	*????????????*
+70		2	low	int, `Character Encoding`_
+72		12	low	*????????????*
 84		8	high	ascii 'SAS FILE'
 92		64	high	ascii, dataset name
 156		8	medium	ascii, file type, e.g. ``'DATA    '``
@@ -90,7 +92,7 @@ offset		length	conf.	description
 164+a1		8	high	double, timestamp, date created, secs since 1/1/60 (for SAS version 8.x and higher)
 172+a1		8	high	double, timestamp, date modified, secs since 1/1/60 (for SAS version 8.x and higher)
 180+a1		16	low	*????????????*
-196+a1		4	high	int, length of SAS7BDAT header := HL .  (1024 or 8192)
+196+a1		4	high	int, length of SAS7BDAT header := HL 
 200+a1		4	high	int, page size := _`PL`
 204+a1		4+a2	high	int, page count := PC .  Length 4 or 8 (**u64**), henceforth denoted **4|8**
 208+a1+a2	8	low	*????????????*
@@ -171,6 +173,40 @@ In all test files except one (not listed in ``data/sas7bdat.sources.RData``), th
 
 In addition, the anomalous file is associated with the SAS release "3.2TK". Indeed, this file may not have been written by SAS. Otherwise, the anomalous file appears to be formatted similarly to other test files.
 
+Character Encoding
+++++++++++++++++++
+
+The integer (one or two bytes) at header offset 70 (bytes) indicates the character encoding of string data. The table below lists the values that are known to occur and the associated character encoding. 
+
+==============	==============	=============
+bytes 70-72	SAS name	iconv name
+==============	==============	=============
+0		(Unspecified)	(Unspecified)
+20		utf-8		UTF-8
+28		us-ascii	US-ASCII
+29		latin1		ISO-8859-1
+30		latin2		ISO-8859-2
+31		latin3		ISO-8859-3
+34		arabic		ISO-8859-6
+36		hebrew		ISO-8859-8
+39		thai		ISO-8859-11
+40		latin5		ISO-8859-9
+60		wlatin2		WINDOWS-1250
+61		wcyrillic	WINDOWS-1251
+62		wlatin1		WINDOWS-1252
+63		wgreek		WINDOWS-1253
+64		wturkish	WINDOWS-1254
+65		whebrew		WINDOWS-1255
+66		warabic		WINDOWS-1256
+119		euc-tw		EUC-TW
+123		big5		BIG-5
+125		euc-cn		EUC-CN
+134		euc-jp		EUC-JP
+138		shift-jis	SHIFT-JIS
+140		euc-kr		EUC-KR
+==============	==============	============= 
+
+When the encoding is unspecified, the file uses the encoding of the SAS session that produced it (usually Windows-1252).
 
 SAS7BDAT Pages
 ==============
