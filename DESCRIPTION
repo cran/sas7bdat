@@ -1,8 +1,8 @@
 Package: sas7bdat
 Type: Package
 Title: sas7bdat Reverse Engineering Documentation
-Version: 0.6
-Date: 2022-05-11
+Version: 0.7
+Date: 2023-05-02
 Authors@R: c(person("Matt", "Shotwell", role=c("aut", "cre"),
                    email="matt.shotwell@vanderbilt.edu"),
              person("Clint", "Cummins", role="ctb",
@@ -14,8 +14,8 @@ Suggests: haven
 License: GPL (>= 2)
 LazyLoad: yes
 NeedsCompilation: no
-Packaged: 2022-05-11 18:32:44 UTC; matt
+Packaged: 2023-05-02 21:10:08 UTC; matt
 Author: Matt Shotwell [aut, cre],
   Clint Cummins [ctb]
 Repository: CRAN
-Date/Publication: 2022-05-12 09:10:02 UTC
+Date/Publication: 2023-05-02 22:30:02 UTC
